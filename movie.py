@@ -21,8 +21,11 @@ class Movie:
 
     def get_movie_name_by_id(self, movie_id):
         try:
-            movie_name = self.df.loc[self.df['MovieID'] == movie_id, 'MovieName'].values[0]
-            return movie_name
+            if(movie_id == ''):
+                return self.df['MovieName']
+            else :
+                movie_name = self.df.loc[self.df['MovieID'] == movie_id, 'MovieName'].values[0]
+                return movie_name
         except IndexError:
             return "Movie not found."
         

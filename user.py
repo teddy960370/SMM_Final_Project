@@ -31,8 +31,11 @@ class User:
 
     def get_user_name_by_id(self, user_id):
         try:
-            user_name = self.df.loc[self.df['index'] == user_id, 'author'].values[0]
-            return user_name
+            if(user_id == ''):
+                return self.df['author']
+            else :
+                user_name = self.df.loc[self.df['index'] == user_id, 'author'].values[0]
+                return user_name
         except IndexError:
             return "User not found."
         

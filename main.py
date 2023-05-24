@@ -13,23 +13,34 @@ from torch_geometric.data import HeteroData
 from torch_geometric.utils import to_networkx
 import matplotlib.pyplot as plt
 
-def draw(data):
+    
+def draw(user,movie,edge):
     
     # Create networkx graph
     graph = nx.MultiDiGraph()
     
     # Add nodes to the graph for each node type
-    graph.add_nodes_from(range(data['user'].num_nodes),bipartite=0)
-    graph.add_nodes_from(range(data['movie'].num_nodes),bipartite=1)
-    graph.add_edges_from(data['user', 'rating', 'movie'].edge_index.transpose())
+    graph.add_nodes_from(user,bipartite=0)
+    graph.add_nodes_from(movie,bipartite=1)
+    graph.add_edges_from(edge)
 
 
     # Set the layout for visualization
-    pos = nx.spring_layout(graph)
+    #pos = nx.spring_layout(graph)
     
     # Visualize the graph
-    plt.figure(figsize=(8, 6))
-    nx.draw(graph, pos=pos, with_labels=True, node_color='lightblue', node_size=500, edge_color='gray', width=0.5, alpha=0.8)
+    plt.figure(figsize=(128, 96))
+    plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei'] # 中文字形
+    
+    nx.draw(graph, 
+            pos=nx.drawing.layout.bipartite_layout(graph, user), 
+            with_labels=True, 
+            node_color='lightblue', 
+            node_size=200, 
+            edge_color='gray', 
+            width=0.5, 
+            alpha=0.8)
+    
     plt.title('Heterogeneous Graph Visualization')
     plt.show()
     
@@ -70,7 +81,8 @@ def readData():
     data['user'].num_nodes = user_node_features.shape[0]
     data['movie'].num_nodes = movie_node_features.shape[0]
     
-    draw(data)
+    edge = df_rating[["author", "movie"]].values
+    draw(userMapping.get_user_name_by_id(''),movieMapping.get_movie_name_by_id(''),edge)
 
 
 def main():
@@ -78,3 +90,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+    
