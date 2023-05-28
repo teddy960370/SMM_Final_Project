@@ -6,7 +6,8 @@ Created on Sat May 20 23:08:21 2023
 """
 import torch
 from torch_geometric.nn import SAGEConv, to_hetero,Sequential,Linear
-from torch.nn import ReLU
+from torch.nn import ReLU,MSELoss,CrossEntropyLoss
+from torchmetrics.classification import Accuracy
 from torch_geometric.loader import NeighborLoader,HGTLoader
 
 import pandas as pd
@@ -80,7 +81,7 @@ def readData():
     userMapping = User(df_rating)
     
     # evaluate normilization
-    df_rating['evaluate'].map({'normal': 3, 'good': 5,'bad': 1})
+    df_rating['evaluate'].map({'normal': 1, 'good': 2,'bad': 0})
     
     #print(movieMapping.get_movie_name_by_id(11))
     #print(userMapping.get_user_name_by_id(11))
@@ -132,7 +133,7 @@ class EdgeDecoder(torch.nn.Module):
     def __init__(self, hidden_channels):
         super().__init__()
         self.lin1 = Linear(2 * hidden_channels, hidden_channels)
-        self.lin2 = Linear(hidden_channels, 1)
+        self.lin2 = Linear(hidden_channels, 3)
 
     def forward(self, z_dict, edge_label_index):
         row, col = edge_label_index
@@ -140,7 +141,7 @@ class EdgeDecoder(torch.nn.Module):
 
         z = self.lin1(z).relu()
         z = self.lin2(z)
-        return z.view(-1)
+        return z
 
 
 class Model(torch.nn.Module):
@@ -164,10 +165,17 @@ def train(model,optimizer,train_data):
     pred = model(train_data.x_dict, train_data.edge_index_dict,
                  train_data['user', 'movie'].edge_label_index)
     target = train_data['user', 'movie'].edge_label
-    loss = weighted_mse_loss(pred, target, None)
+    
+    loss_funxtion = CrossEntropyLoss()
+    loss = loss_funxtion(pred,target.long())
+    
+    accuracy = Accuracy(task="multiclass", num_classes=3).to(device)
+    pred_max = torch.argmax(pred, dim=1)
+    acc = accuracy(pred_max.to(int), target.to(int))
+    
     loss.backward()
     optimizer.step()
-    return float(loss)
+    return float(loss) , acc
 
 
 @torch.no_grad()
@@ -177,12 +185,14 @@ def test(model,data):
                  data['user', 'movie'].edge_label_index)
     pred = pred.clamp(min=0, max=5)
     target = data['user', 'movie'].edge_label.float()
-    rmse = F.mse_loss(pred, target).sqrt()
-    return float(rmse)
-
-def weighted_mse_loss(pred, target, weight=None):
-    weight = 1. if weight is None else weight[target].to(pred.dtype)
-    return (weight * (pred - target.to(pred.dtype)).pow(2)).mean()
+    loss_funxtion = CrossEntropyLoss()
+    loss = loss_funxtion(pred, target.long())
+    
+    accuracy = Accuracy(task="multiclass", num_classes=3).to(device)
+    pred_max = torch.argmax(pred, dim=1)
+    acc = accuracy(pred_max.to(int), target.to(int))
+    
+    return loss,acc
 
 def main():
     
@@ -203,15 +213,17 @@ def main():
     model = Model(hidden_channels=32).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
     
-    #train(data)
     
-    for epoch in range(1, 301):
-        loss = train(model,optimizer,train_data)
-        train_rmse = test(model,train_data)
-        val_rmse = test(model,val_data)
-        test_rmse = test(model,test_data)
-        print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Train: {train_rmse:.4f}, '
-              f'Val: {val_rmse:.4f}, Test: {test_rmse:.4f}')
+    for epoch in range(1, 41):
+        loss,acc = train(model,optimizer,train_data)
+        train_loss , train_acc = test(model,train_data)
+        val_loss , val_acc = test(model,val_data)
+        test_loss,test_acc = test(model,test_data)
+        print(f'Epoch: {epoch:03d}, Accuracy: {acc * 100 : .2f}%, Train: {train_acc * 100 : .2f}%, '
+              f'Val: {val_acc * 100 : .2f}%, Test: {test_acc * 100 : .2f}%')
+        
+        #print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Train: {train_loss:.4f}, '
+        #      f'Val: {val_loss:.4f}, Test: {test_loss:.4f}')
 
 if __name__ == "__main__":
     main()
