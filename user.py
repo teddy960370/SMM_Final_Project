@@ -10,7 +10,7 @@ import pandas as pd
 class User:
     def __init__(self, dataframe):
         
-        dataframe['evaluate'] = dataframe['evaluate'].map({'normal': 0, 'good': 1, 'bad':-1})
+        dataframe['evaluate'] = dataframe['evaluate'].map({'normal': 5, 'good': 10, 'bad': 0})
         
         temp = dataframe[['author', 'evaluate']].groupby(['author']).agg(['mean', 'count'])
         temp = temp.reset_index(drop=False)
