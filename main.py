@@ -23,7 +23,7 @@ import torch_geometric.transforms as T
 import torch.nn.functional as F
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
+
 def draw(user,movie,edge,weights):
     
     # Create networkx graph
@@ -76,12 +76,16 @@ def readData():
     df_movie = pd.read_csv(path + "movie.csv")
     #df_user = pd.read_csv(path + "user.csv")
     df_rating = pd.read_csv(path + "rating.csv")
+    df_pred = pd.read_csv(path + "pred.csv")
+    
+    # 組合預測資料
+    df_rating = pd.concat([df_rating,df_pred])
+    
     
     movieMapping = Movie(df_movie)
     userMapping = User(df_rating)
     
-    # evaluate normilization
-    df_rating['evaluate'].map({'normal': 1, 'good': 2,'bad': 0})
+    
     
     #print(movieMapping.get_movie_name_by_id(11))
     #print(userMapping.get_user_name_by_id(11))
@@ -90,17 +94,22 @@ def readData():
         df_rating.at[index, 'userID'] = userMapping.get_user_id(row['author'])
         df_rating.at[index, 'movieID'] = movieMapping.get_movie_id(row['movie'])
         
+    # 分開預測資料
+    df_pred_test = df_rating[df_rating['evaluate'].isnull()]
+    df_rating = df_rating[df_rating['evaluate'].notnull()]
+    
+    
     edge_index = df_rating[["userID", "movieID"]].values.transpose()
+    
+    # evaluate normilization
+    df_rating['evaluate'].map({'normal': 1, 'good': 2,'bad': 0})
 
     movie_node_features = movieMapping.get_movie_node_features()
     user_node_features = userMapping.get_user_node_features()
     
-    #node_features = {
-    #    'user': torch.tensor(user_node_features.values),
-    #    'movie': torch.tensor(movie_node_features.values)
-    #}
+
     
-    #data = HeteroData(node_features=node_features)
+    # 訓練資料集
     data = HeteroData()
     data['user'].x = torch.tensor(user_node_features.values).float().to(device)
     data['user'].num_nodes = user_node_features.shape[0]
@@ -110,12 +119,24 @@ def readData():
     data['user', 'rating', 'movie'].edge_index = torch.tensor(edge_index).type(torch.int64).to(device)
     data['user', 'rating', 'movie'].edge_label = torch.tensor(df_rating.evaluate.values).to(device)
    
-
-    #weights = df_rating.evaluate.values
-    #edge = df_rating[["author", "movie"]].values    
-    #draw(userMapping.get_user_name_by_id(''),movieMapping.get_movie_name_by_id(''),edge,weights)
-
-    return data
+    # 預測資料集
+    pred_data = HeteroData() 
+    
+# =============================================================================
+#     temp = user_node_features.values
+#     pred_data['user'].x = torch.tensor(temp).float().to(device)
+#     pred_data['user'].num_nodes = temp.shape[0]
+#     temp = movie_node_features.values
+#     pred_data['movie'].x = torch.tensor(temp).float().to(device)
+#     pred_data['movie'].num_nodes = temp.shape[0]
+#     pred_edge_index = df_pred_test[["userID", "movieID"]].values.transpose()
+#     pred_data['user', 'rating', 'movie'].edge_index = torch.tensor(pred_edge_index).type(torch.int64).to(device)
+#     
+#     df_pred_test['evaluate'] = 0
+#     data['user', 'rating', 'movie'].edge_label = torch.tensor(df_pred_test.evaluate.values).to(device)
+# 
+# =============================================================================
+    return data, pred_data
 
 class GNNEncoder(torch.nn.Module):
     def __init__(self, hidden_channels, out_channels):
@@ -145,11 +166,9 @@ class EdgeDecoder(torch.nn.Module):
 
 
 class Model(torch.nn.Module):
-    def __init__(self, hidden_channels):
+    def __init__(self, hidden_channels,data):
         super().__init__()
         
-        data = readData()
-        data = T.ToUndirected()(data)
         
         self.encoder = GNNEncoder(hidden_channels, hidden_channels)
         self.encoder = to_hetero(self.encoder, data.metadata(), aggr='sum')
@@ -179,11 +198,12 @@ def train(model,optimizer,train_data):
 
 
 @torch.no_grad()
-def test(model,data):
+def validation(model,data):
+    
     model.eval()
     pred = model(data.x_dict, data.edge_index_dict,
                  data['user', 'movie'].edge_label_index)
-    pred = pred.clamp(min=0, max=5)
+
     target = data['user', 'movie'].edge_label.float()
     loss_funxtion = CrossEntropyLoss()
     loss = loss_funxtion(pred, target.long())
@@ -194,36 +214,81 @@ def test(model,data):
     
     return loss,acc
 
+@torch.no_grad()
+def test(model,data):
+    
+    model.eval()
+    pred = model(data.x_dict, data.edge_index_dict,
+                 data['user', 'movie'].edge_label_index)
+
+    pred_max = torch.argmax(pred, dim=1)
+
+    return pred_max
+
 def main():
     
-    data = readData()
+    isTest = 0
+    
+    data, pred_data = readData()
     
     data = T.ToUndirected()(data)
+    
+    model = Model(hidden_channels=32, data = data).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    
+    
     transform = T.RandomLinkSplit(
-        num_val=0.05,
-        num_test=0.1,
-        is_undirected=True,
+        num_val = 0.1,
+        num_test = 0.0,
         neg_sampling_ratio=0.0,
+        is_undirected=True,
         edge_types=[('user', 'rating', 'movie')],
         rev_edge_types = [('movie', 'rating', 'user')]
     )
     
-    train_data, val_data, test_data = transform(data)
+
+    train_data, val_data, _ = transform(data)
     
-    model = Model(hidden_channels=32).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-    
-    
-    for epoch in range(1, 41):
-        loss,acc = train(model,optimizer,train_data)
-        train_loss , train_acc = test(model,train_data)
-        val_loss , val_acc = test(model,val_data)
-        test_loss,test_acc = test(model,test_data)
-        print(f'Epoch: {epoch:03d}, Accuracy: {acc * 100 : .2f}%, Train: {train_acc * 100 : .2f}%, '
-              f'Val: {val_acc * 100 : .2f}%, Test: {test_acc * 100 : .2f}%')
+    if(isTest == 1):
+        pred_data = T.ToUndirected()(pred_data)
         
-        #print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Train: {train_loss:.4f}, '
-        #      f'Val: {val_loss:.4f}, Test: {test_loss:.4f}')
+        transform_pred = T.RandomLinkSplit(
+            is_undirected=True,
+            neg_sampling_ratio=0.0,
+            edge_types=[('user', 'rating', 'movie')],
+            rev_edge_types = [('movie', 'rating', 'user')]
+        )
+        
+        test_data = transform_pred(pred_data)
+    
+    
+    
+    
+    for epoch in range(1, 101):
+        train_loss , train_acc = train(model,optimizer,train_data)
+        
+        if(isTest != 1):
+            val_loss , val_acc = validation(model,val_data)
+            
+            #print(f'Epoch: {epoch:03d}, Accuracy: Train: {train_acc * 100 : .2f}%, '
+            #      f'Val: {val_acc * 100 : .2f}%')
+            
+            print(f'Epoch: {epoch:03d}, Loss: Train: {train_loss:.4f}, '
+                  f'Val: {val_loss:.4f}')
+            
+        else :
+            print(f'Epoch: {epoch:03d}, Accuracy:, Train: {train_acc * 100 : .2f}%, ')
+            
+        
+        
+
+    if(isTest == 1):
+        result = test(model,test_data)
+        
+        pred_data.edge_index = result
+    
+    
+    
 
 if __name__ == "__main__":
     main()
