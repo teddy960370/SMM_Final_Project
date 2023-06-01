@@ -22,6 +22,8 @@ import matplotlib.pyplot as plt
 import torch_geometric.transforms as T
 import torch.nn.functional as F
 
+import matplotlib.pyplot as plt
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def draw(user,movie,edge,weights):
@@ -122,20 +124,18 @@ def readData():
     # 預測資料集
     pred_data = HeteroData() 
     
-# =============================================================================
-#     temp = user_node_features.values
-#     pred_data['user'].x = torch.tensor(temp).float().to(device)
-#     pred_data['user'].num_nodes = temp.shape[0]
-#     temp = movie_node_features.values
-#     pred_data['movie'].x = torch.tensor(temp).float().to(device)
-#     pred_data['movie'].num_nodes = temp.shape[0]
-#     pred_edge_index = df_pred_test[["userID", "movieID"]].values.transpose()
-#     pred_data['user', 'rating', 'movie'].edge_index = torch.tensor(pred_edge_index).type(torch.int64).to(device)
-#     
-#     df_pred_test['evaluate'] = 0
-#     data['user', 'rating', 'movie'].edge_label = torch.tensor(df_pred_test.evaluate.values).to(device)
-# 
-# =============================================================================
+    temp = user_node_features.values
+    pred_data['user'].x = torch.tensor(temp).float().to(device)
+    pred_data['user'].num_nodes = temp.shape[0]
+    temp = movie_node_features.values
+    pred_data['movie'].x = torch.tensor(temp).float().to(device)
+    pred_data['movie'].num_nodes = temp.shape[0]
+    pred_edge_index = df_pred_test[["userID", "movieID"]].values.transpose()
+    pred_data['user', 'rating', 'movie'].edge_index = torch.tensor(pred_edge_index).type(torch.int64).to(device)
+    
+    df_pred_test['evaluate'] = 0
+    pred_data['user', 'rating', 'movie'].edge_label = torch.tensor(df_pred_test.evaluate.values).to(device)
+
     return data, pred_data
 
 class GNNEncoder(torch.nn.Module):
@@ -194,7 +194,7 @@ def train(model,optimizer,train_data):
     
     loss.backward()
     optimizer.step()
-    return float(loss) , acc
+    return float(loss.cpu().detach()) , acc.cpu().detach()
 
 
 @torch.no_grad()
@@ -212,7 +212,7 @@ def validation(model,data):
     pred_max = torch.argmax(pred, dim=1)
     acc = accuracy(pred_max.to(int), target.to(int))
     
-    return loss,acc
+    return loss.cpu().detach(),acc.cpu().detach()
 
 @torch.no_grad()
 def test(model,data):
@@ -225,9 +225,31 @@ def test(model,data):
 
     return pred_max
 
+def plt_Learning_curve(train_loss_List,train_acc_List,val_loss_List,val_acc_List):
+    
+    # Loss Curve
+    plt.figure(figsize=(10,5))
+    plt.title("Traning and Validation Loss")
+    plt.plot(val_loss_List,label = 'Valid')
+    plt.plot(train_loss_List,label = 'Train')
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.show()
+    
+    # Accuracy Curve
+    plt.figure(figsize=(10,5))
+    plt.title("Traning and Validation Accuracy")
+    plt.plot(val_acc_List,label = 'Valid')
+    plt.plot(train_acc_List,label = 'Train')
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.show()
+
 def main():
     
-    isTest = 0
+    isTest = 1
     
     data, pred_data = readData()
     
@@ -248,27 +270,23 @@ def main():
     
 
     train_data, val_data, _ = transform(data)
-    
-    if(isTest == 1):
-        pred_data = T.ToUndirected()(pred_data)
         
-        transform_pred = T.RandomLinkSplit(
-            is_undirected=True,
-            neg_sampling_ratio=0.0,
-            edge_types=[('user', 'rating', 'movie')],
-            rev_edge_types = [('movie', 'rating', 'user')]
-        )
-        
-        test_data = transform_pred(pred_data)
     
-    
-    
+    train_loss_List = []
+    train_acc_List = []
+    val_loss_List = []
+    val_acc_List = []
     
     for epoch in range(1, 101):
         train_loss , train_acc = train(model,optimizer,train_data)
+        train_loss_List.append(train_loss)
+        train_acc_List.append(train_acc)
+        
         
         if(isTest != 1):
             val_loss , val_acc = validation(model,val_data)
+            val_loss_List.append(val_loss)
+            val_acc_List.append(val_acc)
             
             #print(f'Epoch: {epoch:03d}, Accuracy: Train: {train_acc * 100 : .2f}%, '
             #      f'Val: {val_acc * 100 : .2f}%')
@@ -280,12 +298,21 @@ def main():
             print(f'Epoch: {epoch:03d}, Accuracy:, Train: {train_acc * 100 : .2f}%, ')
             
         
-        
+    #plt_Learning_curve(train_loss_List,train_acc_List,val_loss_List,val_acc_List)
+    
 
     if(isTest == 1):
-        result = test(model,test_data)
+        
+        pred_data = T.ToUndirected()(pred_data)
+        pred_data['user', 'rating', 'movie'].edge_label_index = pred_data['user', 'rating', 'movie'].edge_index
+        
+        result = test(model,pred_data)
         
         pred_data.edge_index = result
+        
+        df = pd.DataFrame(result.cpu().numpy())
+        df = df[0].map({ 0: 'bad', 1 : 'normal', 2: 'good'})
+        df.to_csv('./data/result.csv',index = False,)
     
     
     
